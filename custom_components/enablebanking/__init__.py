@@ -86,12 +86,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_interval=timedelta(minutes=balance_interval),
     )
 
-    await transaction_coordinator.async_config_entry_first_refresh()
-
-    try:
-        await balance_coordinator.async_config_entry_first_refresh()
-    except Exception as err:
-        _LOGGER.warning("Could not fetch initial balances: %s. Will retry later.", err)
+    # Do not fetch on startup to avoid burning daily API quota on every HA restart
+    # The scheduled coordinator interval handles the first fetch
 
     hass.data[DOMAIN][entry.entry_id] = {
         "transaction_coordinator": transaction_coordinator,
