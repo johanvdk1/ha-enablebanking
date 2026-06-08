@@ -1,7 +1,7 @@
 {
   "domain": "enablebanking",
   "name": "Enable Banking",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "documentation": "https://github.com/johanvdk1/ha-enablebanking",
   "requirements": [
     "cryptography>=41.0.0",

@@ -22,7 +22,7 @@ async def async_setup_entry(
     coordinators = hass.data[DOMAIN][entry.entry_id]
     transaction_coordinator = coordinators["transaction_coordinator"]
     balance_coordinator = coordinators["balance_coordinator"]
-    sensors_config = entry.data.get("sensors", [])
+    sensors_config = coordinators.get("yaml_config", {}).get("sensors", [])
 
     entities = []
     tx_data = transaction_coordinator.data or {}
