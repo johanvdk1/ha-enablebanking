@@ -19,21 +19,32 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up sensors from config entry."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinators = hass.data[DOMAIN][entry.entry_id]
+    transaction_coordinator = coordinators["transaction_coordinator"]
+    balance_coordinator = coordinators["balance_coordinator"]
     sensors_config = entry.data.get("sensors", [])
 
     entities = []
-    data = coordinator.data or {}
+    tx_data = transaction_coordinator.data or {}
+    bal_data = balance_coordinator.data or {}
 
-    for uid, account_data in data.items():
-        # Balance sensor per account
+    # Collect all UIDs from both coordinators
+    all_uids = set(tx_data.keys()) | set(bal_data.keys())
+
+    for uid in all_uids:
+        account_data = tx_data.get(uid) or bal_data.get(uid, {})
+
+        # Balance sensor
         entities.append(
-            EnableBankingBalanceSensor(coordinator, uid, account_data)
+            EnableBankingBalanceSensor(balance_coordinator, uid, account_data)
         )
+
         # Transaction query sensors
         for sensor_cfg in sensors_config:
             entities.append(
-                EnableBankingTransactionSensor(coordinator, uid, account_data, sensor_cfg)
+                EnableBankingTransactionSensor(
+                    transaction_coordinator, uid, account_data, sensor_cfg
+                )
             )
 
     async_add_entities(entities, True)
@@ -46,8 +57,8 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
         """Initialize."""
         super().__init__(coordinator)
         self._uid = uid
-        self._iban = account_data["iban"]
-        self._bank = account_data["bank"]
+        self._iban = account_data.get("iban", uid)
+        self._bank = account_data.get("bank", "Unknown")
         self._attr_name = f"{self._bank} {self._iban} Balance"
         self._attr_unique_id = f"enablebanking_balance_{uid}"
         self._attr_device_class = SensorDeviceClass.MONETARY
@@ -57,6 +68,8 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return balance."""
+        if not self.coordinator.data:
+            return None
         data = self.coordinator.data.get(self._uid, {})
         for b in data.get("balances", []):
             if b.get("balance_type") == "ITAV":
@@ -66,6 +79,8 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         """Return extra attributes."""
+        if not self.coordinator.data:
+            return {"iban": self._iban, "bank": self._bank}
         data = self.coordinator.data.get(self._uid, {})
         return {
             "iban": self._iban,
@@ -81,8 +96,8 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
         """Initialize."""
         super().__init__(coordinator)
         self._uid = uid
-        self._iban = account_data["iban"]
-        self._bank = account_data["bank"]
+        self._iban = account_data.get("iban", uid)
+        self._bank = account_data.get("bank", "Unknown")
         self._sensor_cfg = sensor_cfg
         self._attr_name = sensor_cfg["name"]
         self._attr_unique_id = (
@@ -95,6 +110,8 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return transaction total."""
+        if not self.coordinator.data:
+            return None
         data = self.coordinator.data.get(self._uid, {})
         transactions = data.get("transactions", [])
 

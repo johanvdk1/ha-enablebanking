@@ -1,8 +1,10 @@
 DOMAIN = "enablebanking"
 API_BASE = "https://api.enablebanking.com"
+PRIVATE_KEY_PATH = "/config/enablebanking/private.key"
+SESSIONS_PATH = "/config/enablebanking/sessions.json"
 CONF_APP_ID = "app_id"
-CONF_PRIVATE_KEY = "private_key"
-CONF_SESSIONS = "sessions"
 CONF_SENSORS = "sensors"
-CONF_SCAN_INTERVAL = "scan_interval"
-DEFAULT_SCAN_INTERVAL = 240
+CONF_TRANSACTION_INTERVAL = "transaction_interval"
+CONF_BALANCE_INTERVAL = "balance_interval"
+DEFAULT_TRANSACTION_INTERVAL = 240  # 4 hours
+DEFAULT_BALANCE_INTERVAL = 1440     # 24 hours
