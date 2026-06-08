@@ -51,7 +51,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Enable Banking from a config entry."""
+    # Read YAML config from hass.data (set by async_setup) or fall back to empty
     yaml_config = hass.data.get(DOMAIN, {}).get("yaml_config", {})
+    _LOGGER.warning("enablebanking yaml_config: %s", yaml_config)
 
     api = EnableBankingAPI(app_id=entry.data[CONF_APP_ID])
 

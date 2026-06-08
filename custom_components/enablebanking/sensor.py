@@ -25,14 +25,32 @@ async def async_setup_entry(
     sensors_config = coordinators.get("yaml_config", {}).get("sensors", [])
 
     entities = []
-    tx_data = transaction_coordinator.data or {}
-    bal_data = balance_coordinator.data or {}
 
-    # Collect all UIDs from both coordinators
-    all_uids = set(tx_data.keys()) | set(bal_data.keys())
+    # Load accounts from sessions file directly so entities are always created
+    # even when API calls fail due to rate limits
+    import json
+    from .const import SESSIONS_PATH
+    try:
+        with open(SESSIONS_PATH) as f:
+            sessions = json.load(f)
+        accounts = []
+        for bank_name, session in sessions.items():
+            for account in session.get("accounts", []):
+                accounts.append({
+                    "uid": account.get("uid"),
+                    "iban": account.get("account_id", {}).get("iban", account.get("uid")),
+                    "name": account.get("name", ""),
+                    "bank": bank_name,
+                })
+    except Exception as err:
+        _LOGGER.error("Could not load sessions file: %s", err)
+        accounts = []
 
-    for uid in all_uids:
-        account_data = tx_data.get(uid) or bal_data.get(uid, {})
+    _LOGGER.warning("enablebanking found %d accounts from sessions file", len(accounts))
+    _LOGGER.warning("enablebanking sensors_config: %s", sensors_config)
+
+    for account_data in accounts:
+        uid = account_data["uid"]
 
         # Balance sensor
         entities.append(
