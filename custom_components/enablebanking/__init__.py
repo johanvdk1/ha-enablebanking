@@ -13,6 +13,7 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor"]
 
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Enable Banking from a config entry."""
     api = EnableBankingAPI(
@@ -21,11 +22,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         sessions=entry.data["sessions"],
     )
 
+    async def async_update_data():
+        """Fetch data from Enable Banking API."""
+        try:
+            return await hass.async_add_executor_job(api.fetch_all)
+        except Exception as err:
+            raise UpdateFailed(f"Error communicating with Enable Banking API: {err}") from err
+
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
         name=DOMAIN,
-        update_method=api.fetch_all,
+        update_method=async_update_data,
         update_interval=timedelta(minutes=entry.data.get("scan_interval", DEFAULT_SCAN_INTERVAL)),
     )
 
@@ -36,6 +44,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""

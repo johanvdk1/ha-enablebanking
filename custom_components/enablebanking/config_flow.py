@@ -1,9 +1,11 @@
 """Config flow for Enable Banking."""
-import logging
 import json
+import logging
+
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
+
 from .const import DOMAIN, DEFAULT_SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
@@ -15,30 +17,34 @@ class EnableBankingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     async def async_step_user(self, user_input=None):
+        """Handle the initial step."""
         errors = {}
 
         if user_input is not None:
             try:
                 sessions = json.loads(user_input["sessions"])
+                sensors = json.loads(user_input["sensors"])
                 return self.async_create_entry(
                     title="Enable Banking",
                     data={
                         "app_id": user_input["app_id"],
                         "private_key": user_input["private_key"],
                         "sessions": sessions,
-                        "sensors": json.loads(user_input.get("sensors", "[]")),
+                        "sensors": sensors,
                         "scan_interval": user_input.get("scan_interval", DEFAULT_SCAN_INTERVAL),
                     },
                 )
-            except Exception as e:
-                _LOGGER.error("Config error: %s", e)
-                errors["base"] = "invalid_config"
+            except json.JSONDecodeError:
+                errors["base"] = "invalid_json"
+            except Exception as err:
+                _LOGGER.error("Unexpected error: %s", err)
+                errors["base"] = "unknown"
 
         schema = vol.Schema({
             vol.Required("app_id"): str,
             vol.Required("private_key"): str,
             vol.Required("sessions"): str,
-            vol.Optional("sensors", default="[]"): str,
+            vol.Required("sensors", default="[]"): str,
             vol.Optional("scan_interval", default=DEFAULT_SCAN_INTERVAL): int,
         })
 
@@ -46,16 +52,12 @@ class EnableBankingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=schema,
             errors=errors,
-            description_placeholders={
-                "app_id_help": "Your Enable Banking application ID",
-                "sessions_help": "Paste the contents of your sessions.json file",
-                "sensors_help": 'JSON array of sensor configs, e.g. [{"name": "Luminus This Year", "creditor": "luminus", "period": "year", "direction": "DBIT"}]',
-            }
         )
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
+        """Return options flow."""
         return EnableBankingOptionsFlow(config_entry)
 
 
@@ -63,31 +65,35 @@ class EnableBankingOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow."""
 
     def __init__(self, config_entry):
+        """Initialize."""
         self._config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
+        """Manage options."""
         errors = {}
 
         if user_input is not None:
             try:
+                sensors = json.loads(user_input["sensors"])
                 return self.async_create_entry(
                     title="",
                     data={
-                        "sensors": json.loads(user_input.get("sensors", "[]")),
-                        "scan_interval": user_input.get("scan_interval", DEFAULT_SCAN_INTERVAL),
+                        "sensors": sensors,
+                        "scan_interval": user_input["scan_interval"],
                     },
                 )
-            except Exception as e:
-                _LOGGER.error("Options error: %s", e)
-                errors["base"] = "invalid_config"
-
-        current_sensors = json.dumps(
-            self._config_entry.data.get("sensors", []), indent=2
-        )
+            except json.JSONDecodeError:
+                errors["base"] = "invalid_json"
 
         schema = vol.Schema({
-            vol.Optional("sensors", default=current_sensors): str,
-            vol.Optional("scan_interval", default=self._config_entry.data.get("scan_interval", DEFAULT_SCAN_INTERVAL)): int,
+            vol.Required(
+                "sensors",
+                default=json.dumps(self._config_entry.data.get("sensors", []), indent=2),
+            ): str,
+            vol.Optional(
+                "scan_interval",
+                default=self._config_entry.data.get("scan_interval", DEFAULT_SCAN_INTERVAL),
+            ): int,
         })
 
         return self.async_show_form(
