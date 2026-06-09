@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorDeviceClass
+from homeassistant.const import EntityCategory
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -186,7 +187,7 @@ class EnableBankingRateLimitSensor(CoordinatorEntity, SensorEntity):
         self._attr_name = f"Rate Limit {endpoint}"
         self._attr_unique_id = f"enablebanking_rate_limit_{endpoint.lower()}"
         self._attr_icon = "mdi:alert"
-        self._attr_entity_category = "diagnostic"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def native_value(self):
