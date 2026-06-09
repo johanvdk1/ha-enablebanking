@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorDeviceClass
-from homeassistant.const import EntityCategory
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -28,22 +28,26 @@ async def async_setup_entry(
 
     entities = []
 
-    # Load accounts from sessions file
-    try:
-        with open(SESSIONS_PATH) as f:
-            sessions = json.load(f)
-        accounts = []
-        for bank_name, session in sessions.items():
-            for account in session.get("accounts", []):
-                accounts.append({
-                    "uid": account.get("uid"),
-                    "iban": account.get("account_id", {}).get("iban", account.get("uid")),
-                    "name": account.get("name", ""),
-                    "bank": bank_name,
-                })
-    except Exception as err:
-        _LOGGER.error("Could not load sessions file: %s", err)
-        accounts = []
+    # Load accounts from sessions file in executor to avoid blocking event loop
+    def _load_accounts():
+        try:
+            with open(SESSIONS_PATH) as f:
+                sessions = json.load(f)
+            result = []
+            for bank_name, session in sessions.items():
+                for account in session.get("accounts", []):
+                    result.append({
+                        "uid": account.get("uid"),
+                        "iban": account.get("account_id", {}).get("iban", account.get("uid")),
+                        "name": account.get("name", ""),
+                        "bank": bank_name,
+                    })
+            return result
+        except Exception as err:
+            _LOGGER.error("Could not load sessions file: %s", err)
+            return []
+
+    accounts = await hass.async_add_executor_job(_load_accounts)
 
     for account_data in accounts:
         uid = account_data["uid"]
@@ -65,7 +69,7 @@ async def async_setup_entry(
     entities.append(EnableBankingRateLimitSensor(transaction_coordinator, "Transaction"))
     entities.append(EnableBankingRateLimitSensor(balance_coordinator, "Balance"))
 
-    async_add_entities(entities, True)
+    async_add_entities(entities, False)
 
 
 class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):

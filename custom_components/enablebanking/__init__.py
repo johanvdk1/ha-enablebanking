@@ -59,15 +59,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     transaction_interval = yaml_config.get(CONF_TRANSACTION_INTERVAL, DEFAULT_TRANSACTION_INTERVAL)
     balance_interval = yaml_config.get(CONF_BALANCE_INTERVAL, DEFAULT_BALANCE_INTERVAL)
 
+    import asyncio
     timeout = ClientTimeout(total=30)
 
     async def async_update_transactions():
+        loop = asyncio.get_event_loop()
         async with ClientSession(timeout=timeout) as session:
-            return await api.fetch_transactions(session)
+            return await api.fetch_transactions(session, loop)
 
     async def async_update_balances():
+        loop = asyncio.get_event_loop()
         async with ClientSession(timeout=timeout) as session:
-            return await api.fetch_balances(session)
+            return await api.fetch_balances(session, loop)
 
     transaction_coordinator = DataUpdateCoordinator(
         hass,

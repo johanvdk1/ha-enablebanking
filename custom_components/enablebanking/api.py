@@ -20,12 +20,21 @@ class EnableBankingAPI:
         self._app_id = app_id
 
     def _get_private_key(self):
+        """Read private key - must be called from executor."""
         with open(PRIVATE_KEY_PATH, "rb") as f:
             return serialization.load_pem_private_key(f.read(), password=None)
 
     def _get_sessions(self) -> dict:
+        """Read sessions - must be called from executor."""
         with open(SESSIONS_PATH) as f:
             return json.load(f)
+
+    def _load_all(self):
+        """Load all file-based data in one executor call."""
+        return {
+            "accounts": self._get_accounts(),
+            "jwt": self._get_jwt(),
+        }
 
     def _get_jwt(self):
         now = int(time.time())
@@ -58,13 +67,19 @@ class EnableBankingAPI:
                 })
         return accounts
 
-    async def fetch_transactions(self, session: ClientSession) -> dict:
+    async def fetch_transactions(self, session: ClientSession, loop) -> dict:
         """Fetch transactions for all accounts."""
+        import asyncio
         result = {
             "accounts": {},
             "rate_limited": False,
         }
-        for account in self._get_accounts():
+        # Load file-based data in executor to avoid blocking event loop
+        preloaded = await loop.run_in_executor(None, self._load_all)
+        accounts = preloaded["accounts"]
+        headers = {"Authorization": f"Bearer {preloaded['jwt']}"}
+
+        for account in accounts:
             uid = account["uid"]
             iban = account["iban"]
             try:
@@ -72,7 +87,7 @@ class EnableBankingAPI:
                 date_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 async with session.get(
                     f"{API_BASE}/accounts/{uid}/transactions",
-                    headers=self._get_headers(),
+                    headers=headers,
                     params={"date_from": date_from, "date_to": date_to},
                 ) as r:
                     if r.status == 429:
@@ -94,19 +109,24 @@ class EnableBankingAPI:
                 _LOGGER.error("Error fetching transactions for %s: %s", iban, err)
         return result
 
-    async def fetch_balances(self, session: ClientSession) -> dict:
+    async def fetch_balances(self, session: ClientSession, loop) -> dict:
         """Fetch balances for all accounts."""
         result = {
             "accounts": {},
             "rate_limited": False,
         }
-        for account in self._get_accounts():
+        # Load file-based data in executor to avoid blocking event loop
+        preloaded = await loop.run_in_executor(None, self._load_all)
+        accounts = preloaded["accounts"]
+        headers = {"Authorization": f"Bearer {preloaded['jwt']}"}
+
+        for account in accounts:
             uid = account["uid"]
             iban = account["iban"]
             try:
                 async with session.get(
                     f"{API_BASE}/accounts/{uid}/balances",
-                    headers=self._get_headers(),
+                    headers=headers,
                 ) as r:
                     if r.status == 429:
                         _LOGGER.warning("Rate limit hit for balances on %s", iban)
