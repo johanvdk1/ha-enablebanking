@@ -1,12 +1,11 @@
 {
   "domain": "enablebanking",
   "name": "Enable Banking",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "documentation": "https://github.com/johanvdk1/ha-enablebanking",
   "requirements": [
     "cryptography>=41.0.0",
-    "PyJWT>=2.8.0",
-    "requests>=2.31.0"
+    "PyJWT>=2.8.0"
   ],
   "dependencies": [],
   "codeowners": ["@johanvdk1"],

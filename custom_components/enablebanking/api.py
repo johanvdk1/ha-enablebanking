@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import jwt
-import requests
+from aiohttp import ClientSession, ClientResponseError
 from cryptography.hazmat.primitives import serialization
 
 from .const import API_BASE, PRIVATE_KEY_PATH, SESSIONS_PATH
@@ -58,63 +58,71 @@ class EnableBankingAPI:
                 })
         return accounts
 
-    def fetch_transactions(self) -> dict:
+    async def fetch_transactions(self, session: ClientSession) -> dict:
         """Fetch transactions for all accounts."""
-        result = {}
+        result = {
+            "accounts": {},
+            "rate_limited": False,
+        }
         for account in self._get_accounts():
             uid = account["uid"]
             iban = account["iban"]
             try:
                 date_from = (datetime.now(timezone.utc) - timedelta(days=89)).strftime("%Y-%m-%d")
                 date_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                r = requests.get(
+                async with session.get(
                     f"{API_BASE}/accounts/{uid}/transactions",
                     headers=self._get_headers(),
                     params={"date_from": date_from, "date_to": date_to},
-                    timeout=30,
-                )
-                r.raise_for_status()
-                result[uid] = {
-                    "bank": account["bank"],
-                    "iban": iban,
-                    "name": account["name"],
-                    "transactions": r.json().get("transactions", []),
-                }
-                _LOGGER.debug("Fetched transactions for %s", iban)
-            except requests.exceptions.HTTPError as err:
-                if err.response.status_code == 429:
-                    _LOGGER.warning("Rate limit hit for transactions on %s", iban)
-                else:
-                    _LOGGER.error("HTTP error fetching transactions for %s: %s", iban, err)
+                ) as r:
+                    if r.status == 429:
+                        _LOGGER.warning("Rate limit hit for transactions on %s", iban)
+                        result["rate_limited"] = True
+                        continue
+                    r.raise_for_status()
+                    data = await r.json()
+                    result["accounts"][uid] = {
+                        "bank": account["bank"],
+                        "iban": iban,
+                        "name": account["name"],
+                        "transactions": data.get("transactions", []),
+                    }
+                    _LOGGER.debug("Fetched transactions for %s", iban)
+            except ClientResponseError as err:
+                _LOGGER.error("HTTP error fetching transactions for %s: %s", iban, err)
             except Exception as err:
                 _LOGGER.error("Error fetching transactions for %s: %s", iban, err)
         return result
 
-    def fetch_balances(self) -> dict:
+    async def fetch_balances(self, session: ClientSession) -> dict:
         """Fetch balances for all accounts."""
-        result = {}
+        result = {
+            "accounts": {},
+            "rate_limited": False,
+        }
         for account in self._get_accounts():
             uid = account["uid"]
             iban = account["iban"]
             try:
-                r = requests.get(
+                async with session.get(
                     f"{API_BASE}/accounts/{uid}/balances",
                     headers=self._get_headers(),
-                    timeout=30,
-                )
-                r.raise_for_status()
-                result[uid] = {
-                    "bank": account["bank"],
-                    "iban": iban,
-                    "name": account["name"],
-                    "balances": r.json().get("balances", []),
-                }
-                _LOGGER.debug("Fetched balances for %s", iban)
-            except requests.exceptions.HTTPError as err:
-                if err.response.status_code == 429:
-                    _LOGGER.warning("Rate limit hit for balances on %s", iban)
-                else:
-                    _LOGGER.error("HTTP error fetching balances for %s: %s", iban, err)
+                ) as r:
+                    if r.status == 429:
+                        _LOGGER.warning("Rate limit hit for balances on %s", iban)
+                        result["rate_limited"] = True
+                        continue
+                    r.raise_for_status()
+                    data = await r.json()
+                    result["accounts"][uid] = {
+                        "bank": account["bank"],
+                        "iban": iban,
+                        "name": account["name"],
+                        "balances": data.get("balances", []),
+                    }
+                    _LOGGER.debug("Fetched balances for %s", iban)
+            except ClientResponseError as err:
+                _LOGGER.error("HTTP error fetching balances for %s: %s", iban, err)
             except Exception as err:
                 _LOGGER.error("Error fetching balances for %s: %s", iban, err)
         return result

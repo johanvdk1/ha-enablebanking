@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, SESSIONS_PATH
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,6 +19,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up sensors from config entry."""
+    import json
     coordinators = hass.data[DOMAIN][entry.entry_id]
     transaction_coordinator = coordinators["transaction_coordinator"]
     balance_coordinator = coordinators["balance_coordinator"]
@@ -26,10 +27,7 @@ async def async_setup_entry(
 
     entities = []
 
-    # Load accounts from sessions file directly so entities are always created
-    # even when API calls fail due to rate limits
-    import json
-    from .const import SESSIONS_PATH
+    # Load accounts from sessions file
     try:
         with open(SESSIONS_PATH) as f:
             sessions = json.load(f)
@@ -46,9 +44,6 @@ async def async_setup_entry(
         _LOGGER.error("Could not load sessions file: %s", err)
         accounts = []
 
-    _LOGGER.warning("enablebanking found %d accounts from sessions file", len(accounts))
-    _LOGGER.warning("enablebanking sensors_config: %s", sensors_config)
-
     for account_data in accounts:
         uid = account_data["uid"]
 
@@ -64,6 +59,10 @@ async def async_setup_entry(
                     transaction_coordinator, uid, account_data, sensor_cfg
                 )
             )
+
+    # Rate limit diagnostic sensors
+    entities.append(EnableBankingRateLimitSensor(transaction_coordinator, "Transaction"))
+    entities.append(EnableBankingRateLimitSensor(balance_coordinator, "Balance"))
 
     async_add_entities(entities, True)
 
@@ -88,7 +87,7 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
         """Return balance."""
         if not self.coordinator.data:
             return None
-        data = self.coordinator.data.get(self._uid, {})
+        data = self.coordinator.data.get("accounts", {}).get(self._uid, {})
         for b in data.get("balances", []):
             if b.get("balance_type") == "ITAV":
                 return float(b["balance_amount"]["amount"])
@@ -99,7 +98,7 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
         """Return extra attributes."""
         if not self.coordinator.data:
             return {"iban": self._iban, "bank": self._bank}
-        data = self.coordinator.data.get(self._uid, {})
+        data = self.coordinator.data.get("accounts", {}).get(self._uid, {})
         return {
             "iban": self._iban,
             "bank": self._bank,
@@ -130,7 +129,7 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
         """Return transaction total."""
         if not self.coordinator.data:
             return None
-        data = self.coordinator.data.get(self._uid, {})
+        data = self.coordinator.data.get("accounts", {}).get(self._uid, {})
         transactions = data.get("transactions", [])
 
         creditor_filter = self._sensor_cfg.get("creditor", "").lower()
@@ -175,3 +174,28 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
             "bank": self._bank,
             "filter": self._sensor_cfg,
         }
+
+
+class EnableBankingRateLimitSensor(CoordinatorEntity, SensorEntity):
+    """Diagnostic sensor for rate limit status."""
+
+    def __init__(self, coordinator, endpoint: str):
+        """Initialize."""
+        super().__init__(coordinator)
+        self._endpoint = endpoint
+        self._attr_name = f"Rate Limit {endpoint}"
+        self._attr_unique_id = f"enablebanking_rate_limit_{endpoint.lower()}"
+        self._attr_icon = "mdi:alert"
+        self._attr_entity_category = "diagnostic"
+
+    @property
+    def native_value(self):
+        """Return on if rate limited."""
+        if not self.coordinator.data:
+            return "off"
+        return "on" if self.coordinator.data.get("rate_limited", False) else "off"
+
+    @property
+    def extra_state_attributes(self):
+        """Return extra attributes."""
+        return {"endpoint": self._endpoint}

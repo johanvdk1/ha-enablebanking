@@ -2,11 +2,12 @@
 import logging
 from datetime import timedelta
 
+from aiohttp import ClientSession, ClientTimeout
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api import EnableBankingAPI
 from .const import (
@@ -51,26 +52,22 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Enable Banking from a config entry."""
-    # Read YAML config from hass.data (set by async_setup) or fall back to empty
     yaml_config = hass.data.get(DOMAIN, {}).get("yaml_config", {})
-    _LOGGER.warning("enablebanking yaml_config: %s", yaml_config)
 
     api = EnableBankingAPI(app_id=entry.data[CONF_APP_ID])
 
     transaction_interval = yaml_config.get(CONF_TRANSACTION_INTERVAL, DEFAULT_TRANSACTION_INTERVAL)
     balance_interval = yaml_config.get(CONF_BALANCE_INTERVAL, DEFAULT_BALANCE_INTERVAL)
 
+    timeout = ClientTimeout(total=30)
+
     async def async_update_transactions():
-        try:
-            return await hass.async_add_executor_job(api.fetch_transactions)
-        except Exception as err:
-            raise UpdateFailed(f"Error fetching transactions: {err}") from err
+        async with ClientSession(timeout=timeout) as session:
+            return await api.fetch_transactions(session)
 
     async def async_update_balances():
-        try:
-            return await hass.async_add_executor_job(api.fetch_balances)
-        except Exception as err:
-            raise UpdateFailed(f"Error fetching balances: {err}") from err
+        async with ClientSession(timeout=timeout) as session:
+            return await api.fetch_balances(session)
 
     transaction_coordinator = DataUpdateCoordinator(
         hass,
@@ -105,5 +102,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        entry_data = hass.data[DOMAIN].pop(entry.entry_id)
+        hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
