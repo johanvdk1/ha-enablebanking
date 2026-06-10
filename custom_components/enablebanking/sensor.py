@@ -1,15 +1,17 @@
 """Enable Banking sensors."""
+import json
 import logging
 from datetime import datetime
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorDeviceClass
-from homeassistant.helpers.entity import EntityCategory
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, SESSIONS_PATH
+from .database import get_balance, get_transaction_total
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,13 +22,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up sensors from config entry."""
-    import json
     coordinators = hass.data[DOMAIN][entry.entry_id]
     transaction_coordinator = coordinators["transaction_coordinator"]
     balance_coordinator = coordinators["balance_coordinator"]
     sensors_config = coordinators.get("yaml_config", {}).get("sensors", [])
-
-    entities = []
 
     # Load accounts from sessions file in executor to avoid blocking event loop
     def _load_accounts():
@@ -48,6 +47,8 @@ async def async_setup_entry(
             return []
 
     accounts = await hass.async_add_executor_job(_load_accounts)
+
+    entities = []
 
     for account_data in accounts:
         uid = account_data["uid"]
@@ -73,7 +74,7 @@ async def async_setup_entry(
 
 
 class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
-    """Sensor for account balance."""
+    """Sensor for account balance - reads from database."""
 
     def __init__(self, coordinator, uid, account_data):
         """Initialize."""
@@ -89,30 +90,20 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Return balance."""
-        if not self.coordinator.data:
-            return None
-        data = self.coordinator.data.get("accounts", {}).get(self._uid, {})
-        for b in data.get("balances", []):
-            if b.get("balance_type") == "ITAV":
-                return float(b["balance_amount"]["amount"])
-        return None
+        """Return balance from database."""
+        return get_balance(self._uid)
 
     @property
     def extra_state_attributes(self):
         """Return extra attributes."""
-        if not self.coordinator.data:
-            return {"iban": self._iban, "bank": self._bank}
-        data = self.coordinator.data.get("accounts", {}).get(self._uid, {})
         return {
             "iban": self._iban,
             "bank": self._bank,
-            "balances": data.get("balances", []),
         }
 
 
 class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
-    """Sensor for querying transaction totals."""
+    """Sensor for querying transaction totals - reads from database."""
 
     def __init__(self, coordinator, uid, account_data, sensor_cfg):
         """Initialize."""
@@ -131,45 +122,13 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Return transaction total."""
-        if not self.coordinator.data:
-            return None
-        data = self.coordinator.data.get("accounts", {}).get(self._uid, {})
-        transactions = data.get("transactions", [])
-
-        creditor_filter = self._sensor_cfg.get("creditor", "").lower()
-        period = self._sensor_cfg.get("period", "year")
-        direction = self._sensor_cfg.get("direction", "DBIT")
-
-        now = datetime.now()
-        if period == "year":
-            date_from = datetime(now.year, 1, 1).date()
-        elif period == "month":
-            date_from = datetime(now.year, now.month, 1).date()
-        else:
-            date_from = None
-
-        total = 0.0
-        for tx in transactions:
-            if tx.get("credit_debit_indicator") != direction:
-                continue
-            if date_from:
-                try:
-                    booking_date = datetime.strptime(tx["booking_date"], "%Y-%m-%d").date()
-                    if booking_date < date_from:
-                        continue
-                except (ValueError, KeyError):
-                    continue
-            creditor = tx.get("creditor") or {}
-            creditor_name = (creditor.get("name") or "").lower()
-            if creditor_filter and creditor_filter not in creditor_name:
-                continue
-            try:
-                total += float(tx["transaction_amount"]["amount"])
-            except (ValueError, KeyError):
-                continue
-
-        return round(total, 2)
+        """Return transaction total from database."""
+        return get_transaction_total(
+            uid=self._uid,
+            creditor_filter=self._sensor_cfg.get("creditor", ""),
+            period=self._sensor_cfg.get("period", "year"),
+            direction=self._sensor_cfg.get("direction", "DBIT"),
+        )
 
     @property
     def extra_state_attributes(self):

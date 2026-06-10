@@ -9,6 +9,7 @@ from aiohttp import ClientSession, ClientResponseError
 from cryptography.hazmat.primitives import serialization
 
 from .const import API_BASE, PRIVATE_KEY_PATH, SESSIONS_PATH
+from .database import save_transactions, save_balance
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,12 +30,18 @@ class EnableBankingAPI:
         with open(SESSIONS_PATH) as f:
             return json.load(f)
 
-    def _load_all(self):
-        """Load all file-based data in one executor call."""
-        return {
-            "accounts": self._get_accounts(),
-            "jwt": self._get_jwt(),
-        }
+    def _get_accounts(self):
+        sessions = self._get_sessions()
+        accounts = []
+        for bank_name, session in sessions.items():
+            for account in session.get("accounts", []):
+                accounts.append({
+                    "uid": account.get("uid"),
+                    "iban": account.get("account_id", {}).get("iban", account.get("uid")),
+                    "name": account.get("name", ""),
+                    "bank": bank_name,
+                })
+        return accounts
 
     def _get_jwt(self):
         now = int(time.time())
@@ -51,30 +58,19 @@ class EnableBankingAPI:
             headers={"kid": self._app_id},
         )
 
-    def _get_headers(self):
-        return {"Authorization": f"Bearer {self._get_jwt()}"}
-
-    def _get_accounts(self):
-        sessions = self._get_sessions()
-        accounts = []
-        for bank_name, session in sessions.items():
-            for account in session.get("accounts", []):
-                accounts.append({
-                    "uid": account.get("uid"),
-                    "iban": account.get("account_id", {}).get("iban", account.get("uid")),
-                    "name": account.get("name", ""),
-                    "bank": bank_name,
-                })
-        return accounts
+    def _load_all(self):
+        """Load all file-based data in one executor call."""
+        return {
+            "accounts": self._get_accounts(),
+            "jwt": self._get_jwt(),
+        }
 
     async def fetch_transactions(self, session: ClientSession, loop) -> dict:
         """Fetch transactions for all accounts."""
-        import asyncio
         result = {
             "accounts": {},
             "rate_limited": False,
         }
-        # Load file-based data in executor to avoid blocking event loop
         preloaded = await loop.run_in_executor(None, self._load_all)
         accounts = preloaded["accounts"]
         headers = {"Authorization": f"Bearer {preloaded['jwt']}"}
@@ -96,13 +92,17 @@ class EnableBankingAPI:
                         continue
                     r.raise_for_status()
                     data = await r.json()
+                    transactions = data.get("transactions", [])
+                    # Save to database
+                    await loop.run_in_executor(
+                        None, save_transactions, uid, iban, account["bank"], transactions
+                    )
                     result["accounts"][uid] = {
                         "bank": account["bank"],
                         "iban": iban,
                         "name": account["name"],
-                        "transactions": data.get("transactions", []),
                     }
-                    _LOGGER.debug("Fetched transactions for %s", iban)
+                    _LOGGER.debug("Fetched and saved transactions for %s", iban)
             except ClientResponseError as err:
                 _LOGGER.error("HTTP error fetching transactions for %s: %s", iban, err)
             except Exception as err:
@@ -115,7 +115,6 @@ class EnableBankingAPI:
             "accounts": {},
             "rate_limited": False,
         }
-        # Load file-based data in executor to avoid blocking event loop
         preloaded = await loop.run_in_executor(None, self._load_all)
         accounts = preloaded["accounts"]
         headers = {"Authorization": f"Bearer {preloaded['jwt']}"}
@@ -134,13 +133,17 @@ class EnableBankingAPI:
                         continue
                     r.raise_for_status()
                     data = await r.json()
+                    balances = data.get("balances", [])
+                    # Save to database
+                    await loop.run_in_executor(
+                        None, save_balance, uid, iban, account["bank"], balances
+                    )
                     result["accounts"][uid] = {
                         "bank": account["bank"],
                         "iban": iban,
                         "name": account["name"],
-                        "balances": data.get("balances", []),
                     }
-                    _LOGGER.debug("Fetched balances for %s", iban)
+                    _LOGGER.debug("Fetched and saved balances for %s", iban)
             except ClientResponseError as err:
                 _LOGGER.error("HTTP error fetching balances for %s: %s", iban, err)
             except Exception as err:

@@ -19,6 +19,7 @@ from .const import (
     DEFAULT_TRANSACTION_INTERVAL,
     DEFAULT_BALANCE_INTERVAL,
 )
+from .database import init_db
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.data.setdefault(DOMAIN, {})
     if DOMAIN in config:
         hass.data[DOMAIN]["yaml_config"] = config[DOMAIN]
+    # Initialize database in executor to avoid blocking event loop
+    await hass.async_add_executor_job(init_db)
     return True
 
 
