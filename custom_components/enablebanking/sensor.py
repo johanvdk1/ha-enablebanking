@@ -89,6 +89,16 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
         self._attr_native_unit_of_measurement = "EUR"
 
     @property
+    def device_info(self):
+        """Return device info."""
+        return {
+            "identifiers": {(DOMAIN, self._uid)},
+            "name": f"{self._bank} {self._iban}",
+            "manufacturer": self._bank,
+            "model": "Bank Account",
+        }
+
+    @property
     def native_value(self):
         """Return balance from database."""
         return get_balance(self._uid)
@@ -121,6 +131,16 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
         self._attr_native_unit_of_measurement = "EUR"
 
     @property
+    def device_info(self):
+        """Return device info."""
+        return {
+            "identifiers": {(DOMAIN, self._uid)},
+            "name": f"{self._bank} {self._iban}",
+            "manufacturer": self._bank,
+            "model": "Bank Account",
+        }
+
+    @property
     def native_value(self):
         """Return transaction total from database."""
         return get_transaction_total(
@@ -151,6 +171,16 @@ class EnableBankingRateLimitSensor(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = f"enablebanking_rate_limit_{endpoint.lower()}"
         self._attr_icon = "mdi:alert"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def device_info(self):
+        """Return device info."""
+        return {
+            "identifiers": {(DOMAIN, "service")},
+            "name": "Enable Banking",
+            "manufacturer": "Enable Banking",
+            "model": "Service",
+        }
 
     @property
     def native_value(self):
