@@ -126,9 +126,12 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = (
             f"enablebanking_tx_{uid}_{sensor_cfg['name'].lower().replace(' ', '_')}"
         )
-        self._attr_device_class = SensorDeviceClass.MONETARY
-        self._attr_state_class = SensorStateClass.TOTAL
-        self._attr_native_unit_of_measurement = "EUR"
+        if str(sensor_cfg.get("aggregate", "sum")).lower() == "count":
+            self._attr_state_class = SensorStateClass.MEASUREMENT
+        else:
+            self._attr_device_class = SensorDeviceClass.MONETARY
+            self._attr_state_class = SensorStateClass.TOTAL
+            self._attr_native_unit_of_measurement = "EUR"
 
     @property
     def device_info(self):
