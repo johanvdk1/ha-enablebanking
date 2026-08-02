@@ -1,7 +1,7 @@
 """Database layer for Enable Banking integration."""
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional
 
 from .const import DB_PATH
@@ -130,37 +130,150 @@ def get_balance(uid: str) -> Optional[float]:
         return None
 
 
+"""Replacement for get_transaction_total in database.py.
+
+Also add to the imports at the top of database.py:
+    from datetime import datetime, date
+(the module currently imports only `datetime`)
+"""
+
+# Whitelists. Only these values are ever interpolated into SQL; everything
+# else is passed as a bound parameter. Keep SENSOR_SCHEMA in __init__.py in
+# sync with both dicts so bad YAML fails at startup, not at read time.
+
+AGGREGATES = {
+    "sum": "SUM",
+    "avg": "AVG",
+    "min": "MIN",
+    "max": "MAX",
+    "count": "COUNT",
+    "total": "TOTAL",      # like SUM, but returns 0.0 instead of NULL on empty
+}
+
+MATCH_FIELDS = {
+    "creditor": "creditor_name",
+    "debtor": "debtor_name",
+    "remittance": "remittance_information",
+    "currency": "currency",
+    "reference": "entry_reference",
+}
+
+MATCH_MODES = ("contains", "equals", "starts_with", "ends_with")
+
+
+def _cycle_year(anchor_month: int, anchor_day: int, today: date) -> int:
+    """Year in which the current cycle started.
+
+    A cycle beginning 02-01 means Jan 2027 still belongs to the cycle that
+    opened Feb 2026, so the year rolls back until the anchor has passed.
+    """
+    if (today.month, today.day) >= (anchor_month, anchor_day):
+        return today.year
+    return today.year - 1
+
+
+def _resolve_period(period) -> tuple:
+    """Return (date_from, date_to) as ISO strings or None.
+
+    `period` is a mapping {"from": "MM-DD", "to": "MM-DD"}, or absent for no
+    date restriction. Month-day anchors are deliberate: the year is derived on
+    every read, so the window rolls forward on its own instead of silently
+    accumulating past the end of a cycle. A calendar year is from: "01-01".
+    """
+    if not period:
+        return None, None
+
+    today = datetime.now().date()
+    date_from = date_to = None
+
+    raw_from = period.get("from")
+    if raw_from:
+        m, d = (int(x) for x in raw_from.split("-"))
+        start_year = _cycle_year(m, d, today)
+        date_from = f"{start_year}-{m:02d}-{d:02d}"
+
+        raw_to = period.get("to")
+        if raw_to:
+            m2, d2 = (int(x) for x in raw_to.split("-"))
+            # A window that wraps the new year (e.g. 02-01 -> 01-10) ends in
+            # the following year; one that doesn't ends in the same year.
+            end_year = start_year if (m2, d2) > (m, d) else start_year + 1
+            date_to = f"{end_year}-{m2:02d}-{d2:02d}"
+
+    return date_from, date_to
+
+
 def get_transaction_total(
     uid: str,
-    creditor_filter: str = "",
-    period: str = "year",
-    direction: str = "DBIT",
+    period=None,
+    direction: str = "",
+    matches: list = None,
+    aggregate: str = "sum",
 ) -> float:
-    """Query transaction total from database."""
+    """Aggregate stored transactions for one account.
+
+    Every filter is optional and an empty/absent value means "no restriction",
+    so an unfiltered call returns the aggregate over all stored transactions
+    for the account. Runs against SQLite only -- no API call, no rate limit.
+    """
     try:
-        now = datetime.now()
-        if period == "year":
-            date_from = f"{now.year}-01-01"
-        elif period == "month":
-            date_from = f"{now.year}-{now.month:02d}-01"
-        else:
-            date_from = None
+        agg = AGGREGATES.get(str(aggregate).lower())
+        if not agg:
+            _LOGGER.error("Unknown aggregate %r, falling back to SUM", aggregate)
+            agg = "SUM"
 
-        query = """
-            SELECT COALESCE(SUM(amount), 0)
-            FROM transactions
-            WHERE account_uid = ?
-            AND credit_debit_indicator = ?
-        """
-        params = [uid, direction]
+        # COUNT(amount) equals COUNT(*) here because amount is NOT NULL, but
+        # COUNT(*) says what is meant.
+        column = "*" if agg == "COUNT" else "amount"
 
+        clauses = ["account_uid = ?"]
+        params = [uid]
+
+        for m in (matches or []):
+            field = MATCH_FIELDS.get(m.get("field"))
+            value = m.get("value")
+            if not field or not value:
+                continue
+
+            mode = m.get("mode", "contains")
+            value = str(value).lower()
+
+            if mode == "equals":
+                clauses.append(f"LOWER(COALESCE({field},'')) = ?")
+                params.append(value)
+            else:
+                pattern = {
+                    "contains": f"%{value}%",
+                    "starts_with": f"{value}%",
+                    "ends_with": f"%{value}",
+                }.get(mode)
+                if pattern is None:
+                    _LOGGER.error("Unknown match mode %r, skipping", mode)
+                    continue
+                clauses.append(f"LOWER(COALESCE({field},'')) LIKE ?")
+                params.append(pattern)
+
+        if direction:
+            clauses.append("credit_debit_indicator = ?")
+            params.append(direction)
+
+        date_from, date_to = _resolve_period(period)
+
+        # String comparison, correct only because booking_date is ISO-8601
+        # (YYYY-MM-DD), which sorts lexicographically as it does
+        # chronologically. A bank returning any other format breaks this
+        # silently rather than loudly.
         if date_from:
-            query += " AND booking_date >= ?"
+            clauses.append("booking_date >= ?")
             params.append(date_from)
+        if date_to:
+            clauses.append("booking_date <= ?")
+            params.append(date_to)
 
-        if creditor_filter:
-            query += " AND LOWER(creditor_name) LIKE ?"
-            params.append(f"%{creditor_filter.lower()}%")
+        query = (
+            f"SELECT COALESCE({agg}({column}), 0) FROM transactions "
+            f"WHERE {' AND '.join(clauses)}"
+        )
 
         with sqlite3.connect(DB_PATH) as conn:
             row = conn.execute(query, params).fetchone()
