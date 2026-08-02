@@ -145,9 +145,10 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
         """Return transaction total from database."""
         return get_transaction_total(
             uid=self._uid,
-            creditor_filter=self._sensor_cfg.get("creditor", ""),
-            period=self._sensor_cfg.get("period", "year"),
-            direction=self._sensor_cfg.get("direction", "DBIT"),
+            period=self._sensor_cfg.get("period"),
+            direction=self._sensor_cfg.get("direction", ""),
+            matches=self._sensor_cfg.get("match", []),
+            aggregate=self._sensor_cfg.get("aggregate", "sum"),
         )
 
     @property
