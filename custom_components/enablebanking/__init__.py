@@ -27,9 +27,20 @@ PLATFORMS = ["sensor"]
 
 SENSOR_SCHEMA = vol.Schema({
     vol.Required("name"): cv.string,
-    vol.Optional("creditor", default=""): cv.string,
-    vol.Optional("period", default="year"): vol.In(["year", "month", "all"]),
-    vol.Optional("direction", default="DBIT"): vol.In(["DBIT", "CRDT"]),
+    vol.Optional("aggregate", default="sum"): vol.In(
+        ["sum", "avg", "min", "max", "count", "total"]),
+    vol.Optional("direction", default=""): vol.In(["DBIT", "CRDT", ""]),
+    vol.Optional("period"): vol.Schema({
+        vol.Required("from"): cv.string,
+        vol.Optional("to"): cv.string,
+    }),
+    vol.Optional("match", default=[]): vol.All(cv.ensure_list, [vol.Schema({
+        vol.Required("field"): vol.In(
+            ["creditor", "debtor", "remittance", "currency", "reference"]),
+        vol.Required("value"): cv.string,
+        vol.Optional("mode", default="contains"): vol.In(
+            ["contains", "equals", "starts_with", "ends_with"]),
+    })]),
 })
 
 CONFIG_SCHEMA = vol.Schema({
