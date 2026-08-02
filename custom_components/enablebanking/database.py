@@ -130,13 +130,6 @@ def get_balance(uid: str) -> Optional[float]:
         return None
 
 
-"""Replacement for get_transaction_total in database.py.
-
-Also add to the imports at the top of database.py:
-    from datetime import datetime, date
-(the module currently imports only `datetime`)
-"""
-
 # Whitelists. Only these values are ever interpolated into SQL; everything
 # else is passed as a bound parameter. Keep SENSOR_SCHEMA in __init__.py in
 # sync with both dicts so bad YAML fails at startup, not at read time.
@@ -164,8 +157,9 @@ MATCH_MODES = ("contains", "equals", "starts_with", "ends_with")
 def _cycle_year(anchor_month: int, anchor_day: int, today: date) -> int:
     """Year in which the current cycle started.
 
-    A cycle beginning 02-01 means Jan 2027 still belongs to the cycle that
-    opened Feb 2026, so the year rolls back until the anchor has passed.
+    Unused now that _resolve_period no longer parses MM-DD anchors itself
+    (that logic moved into the YAML's own Jinja, rendered upstream in
+    sensor.py). Left in place rather than deleted.
     """
     if (today.month, today.day) >= (anchor_month, anchor_day):
         return today.year
@@ -173,34 +167,16 @@ def _cycle_year(anchor_month: int, anchor_day: int, today: date) -> int:
 
 
 def _resolve_period(period) -> tuple:
-    """Return (date_from, date_to) as ISO strings or None.
+    """Return (date_from, date_to) as ISO date strings, or None.
 
-    `period` is a mapping {"from": "MM-DD", "to": "MM-DD"}, or absent for no
-    date restriction. Month-day anchors are deliberate: the year is derived on
-    every read, so the window rolls forward on its own instead of silently
-    accumulating past the end of a cycle. A calendar year is from: "01-01".
+    `period` is a mapping {"from": ..., "to": ...}. Values arrive here
+    already resolved -- any Jinja in the YAML (e.g. "{{ now().strftime(...) }}")
+    is rendered upstream, in the sensor, before this function is called.
+    Absent, missing, or empty means no restriction on that side.
     """
     if not period:
         return None, None
-
-    today = datetime.now().date()
-    date_from = date_to = None
-
-    raw_from = period.get("from")
-    if raw_from:
-        m, d = (int(x) for x in raw_from.split("-"))
-        start_year = _cycle_year(m, d, today)
-        date_from = f"{start_year}-{m:02d}-{d:02d}"
-
-        raw_to = period.get("to")
-        if raw_to:
-            m2, d2 = (int(x) for x in raw_to.split("-"))
-            # A window that wraps the new year (e.g. 02-01 -> 01-10) ends in
-            # the following year; one that doesn't ends in the same year.
-            end_year = start_year if (m2, d2) > (m, d) else start_year + 1
-            date_to = f"{end_year}-{m2:02d}-{d2:02d}"
-
-    return date_from, date_to
+    return period.get("from") or None, period.get("to") or None
 
 
 def get_transaction_total(
