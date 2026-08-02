@@ -189,12 +189,12 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
             self._sensor_cfg.get("aggregate", "sum"),
         )
         self.async_write_ha_state()
-
+  
     async def _render(self, value):
         """Render a config value as Jinja if it contains a template, else return as-is."""
         if value is None:
             return None
-        return await Template(str(value), self.hass).async_render()
+        return Template(str(value), self.hass).async_render()
 
     @property
     def extra_state_attributes(self):
