@@ -8,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.template import Template
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, SESSIONS_PATH
@@ -113,7 +114,14 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
 
 
 class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
-    """Sensor for querying transaction totals - reads from database."""
+    """Sensor for querying transaction totals - reads from database.
+
+    period/match values in sensor_cfg may contain Jinja (e.g.
+    "{{ now().strftime('%Y-%m-01') }}"); they are rendered on every
+    coordinator update via _handle_coordinator_update, so the underlying
+    query can express rolling windows ("this month", "since 1 Feb of the
+    current cycle", etc.) without any code change per sensor.
+    """
 
     def __init__(self, coordinator, uid, account_data, sensor_cfg):
         """Initialize."""
@@ -132,6 +140,7 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
             self._attr_device_class = SensorDeviceClass.MONETARY
             self._attr_state_class = SensorStateClass.TOTAL
             self._attr_native_unit_of_measurement = "EUR"
+        self._attr_native_value = None
 
     @property
     def device_info(self):
@@ -145,14 +154,47 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Return transaction total from database."""
-        return get_transaction_total(
-            uid=self._uid,
-            period=self._sensor_cfg.get("period"),
-            direction=self._sensor_cfg.get("direction", ""),
-            matches=self._sensor_cfg.get("match", []),
-            aggregate=self._sensor_cfg.get("aggregate", "sum"),
+        """Return the last computed transaction total."""
+        return self._attr_native_value
+
+    async def async_added_to_hass(self):
+        """Populate an initial value without waiting for the next coordinator refresh.
+
+        The integration deliberately skips fetching on startup (see
+        __init__.py), so coordinator.data can be empty right after a
+        restart. The SQLite data itself is unaffected by restarts, so
+        there's no reason the sensor's value should sit blank meanwhile.
+        """
+        await super().async_added_to_hass()
+        await self._handle_coordinator_update()
+
+    async def _handle_coordinator_update(self) -> None:
+        """Render any Jinja in the filter config, then recompute the total."""
+        period = self._sensor_cfg.get("period") or {}
+        rendered_period = {
+            "from": await self._render(period.get("from")),
+            "to": await self._render(period.get("to")),
+        }
+        rendered_matches = [
+            {**m, "value": await self._render(m.get("value"))}
+            for m in self._sensor_cfg.get("match", [])
+        ]
+
+        self._attr_native_value = await self.hass.async_add_executor_job(
+            get_transaction_total,
+            self._uid,
+            rendered_period,
+            self._sensor_cfg.get("direction", ""),
+            rendered_matches,
+            self._sensor_cfg.get("aggregate", "sum"),
         )
+        self.async_write_ha_state()
+
+    async def _render(self, value):
+        """Render a config value as Jinja if it contains a template, else return as-is."""
+        if value is None:
+            return None
+        return await Template(str(value), self.hass).async_render()
 
     @property
     def extra_state_attributes(self):
