@@ -13,6 +13,7 @@ from .api import EnableBankingAPI
 from .const import (
     DOMAIN,
     CONF_APP_ID,
+    CONF_ACCOUNTS,
     CONF_SENSORS,
     CONF_TRANSACTION_INTERVAL,
     CONF_BALANCE_INTERVAL,
@@ -24,6 +25,11 @@ from .database import init_db
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor"]
+
+ACCOUNT_SCHEMA = vol.Schema({
+    vol.Required("alias"): cv.string,
+    vol.Required("iban"): cv.string,
+})
 
 SENSOR_SCHEMA = vol.Schema({
     vol.Required("name"): cv.string,
@@ -47,6 +53,9 @@ CONFIG_SCHEMA = vol.Schema({
     DOMAIN: vol.Schema({
         vol.Optional(CONF_TRANSACTION_INTERVAL, default=DEFAULT_TRANSACTION_INTERVAL): cv.positive_int,
         vol.Optional(CONF_BALANCE_INTERVAL, default=DEFAULT_BALANCE_INTERVAL): cv.positive_int,
+        vol.Optional(CONF_ACCOUNTS, default=[]): vol.All(
+            cv.ensure_list, [ACCOUNT_SCHEMA]
+        ),
         vol.Optional(CONF_SENSORS, default=[]): vol.All(
             cv.ensure_list, [SENSOR_SCHEMA]
         ),
@@ -59,7 +68,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.data.setdefault(DOMAIN, {})
     if DOMAIN in config:
         hass.data[DOMAIN]["yaml_config"] = config[DOMAIN]
-    # Initialize database in executor to avoid blocking event loop
     await hass.async_add_executor_job(init_db)
     return True
 
@@ -101,9 +109,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_method=async_update_balances,
         update_interval=timedelta(minutes=balance_interval),
     )
-
-    # Do not fetch on startup to avoid burning daily API quota on every HA restart
-    # The scheduled coordinator interval handles the first fetch
 
     hass.data[DOMAIN][entry.entry_id] = {
         "transaction_coordinator": transaction_coordinator,

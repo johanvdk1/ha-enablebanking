@@ -10,13 +10,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def init_db() -> None:
-    """Create database and tables if they don't exist."""
+    """Create database and tables if they don't exist, then migrate."""
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 entry_reference TEXT NOT NULL,
-                account_uid TEXT NOT NULL,
-                iban TEXT,
+                iban TEXT NOT NULL,
                 bank TEXT,
                 amount REAL NOT NULL,
                 currency TEXT,
@@ -25,13 +24,12 @@ def init_db() -> None:
                 creditor_name TEXT,
                 debtor_name TEXT,
                 remittance_information TEXT,
-                PRIMARY KEY (entry_reference, account_uid)
+                PRIMARY KEY (entry_reference, iban)
             )
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS balances (
-                account_uid TEXT PRIMARY KEY,
-                iban TEXT,
+                iban TEXT PRIMARY KEY,
                 bank TEXT,
                 amount REAL,
                 currency TEXT,
@@ -40,11 +38,75 @@ def init_db() -> None:
             )
         """)
         conn.commit()
+    migrate_db()
     _LOGGER.debug("Database initialized at %s", DB_PATH)
 
 
+def migrate_db() -> None:
+    """Migrate existing data from account_uid-keyed schema to iban-keyed schema."""
+    with sqlite3.connect(DB_PATH) as conn:
+        # Check if old transactions table has account_uid column
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(transactions)").fetchall()]
+        if "account_uid" in cols and "iban" in cols:
+            _LOGGER.info("Migrating transactions table from account_uid to iban as primary key")
+            # Create new table with iban-based primary key
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS transactions_new (
+                    entry_reference TEXT NOT NULL,
+                    iban TEXT NOT NULL,
+                    bank TEXT,
+                    amount REAL NOT NULL,
+                    currency TEXT,
+                    credit_debit_indicator TEXT,
+                    booking_date TEXT,
+                    creditor_name TEXT,
+                    debtor_name TEXT,
+                    remittance_information TEXT,
+                    PRIMARY KEY (entry_reference, iban)
+                )
+            """)
+            # Copy data — use iban column which was already stored
+            conn.execute("""
+                INSERT OR IGNORE INTO transactions_new
+                SELECT entry_reference, iban, bank, amount, currency,
+                       credit_debit_indicator, booking_date, creditor_name,
+                       debtor_name, remittance_information
+                FROM transactions
+                WHERE iban IS NOT NULL
+            """)
+            conn.execute("DROP TABLE transactions")
+            conn.execute("ALTER TABLE transactions_new RENAME TO transactions")
+            _LOGGER.info("Transactions migration complete")
+
+        # Check if old balances table has account_uid column
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(balances)").fetchall()]
+        if "account_uid" in cols:
+            _LOGGER.info("Migrating balances table from account_uid to iban as primary key")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS balances_new (
+                    iban TEXT PRIMARY KEY,
+                    bank TEXT,
+                    amount REAL,
+                    currency TEXT,
+                    balance_type TEXT,
+                    last_updated TEXT
+                )
+            """)
+            conn.execute("""
+                INSERT OR IGNORE INTO balances_new
+                SELECT iban, bank, amount, currency, balance_type, last_updated
+                FROM balances
+                WHERE iban IS NOT NULL
+            """)
+            conn.execute("DROP TABLE balances")
+            conn.execute("ALTER TABLE balances_new RENAME TO balances")
+            _LOGGER.info("Balances migration complete")
+
+        conn.commit()
+
+
 def save_transactions(uid: str, iban: str, bank: str, transactions: list) -> int:
-    """Save transactions to database, skip duplicates. Returns count of new records."""
+    """Save transactions to database keyed on iban, skip duplicates."""
     new_count = 0
     with sqlite3.connect(DB_PATH) as conn:
         for tx in transactions:
@@ -57,14 +119,13 @@ def save_transactions(uid: str, iban: str, bank: str, transactions: list) -> int
                 remittance = ", ".join(tx.get("remittance_information") or [])
                 conn.execute("""
                     INSERT OR IGNORE INTO transactions (
-                        entry_reference, account_uid, iban, bank,
+                        entry_reference, iban, bank,
                         amount, currency, credit_debit_indicator,
                         booking_date, creditor_name, debtor_name,
                         remittance_information
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     entry_reference,
-                    uid,
                     iban,
                     bank,
                     float(tx["transaction_amount"]["amount"]),
@@ -85,8 +146,7 @@ def save_transactions(uid: str, iban: str, bank: str, transactions: list) -> int
 
 
 def save_balance(uid: str, iban: str, bank: str, balances: list) -> None:
-    """Save latest balance to database."""
-    # Prefer ITAV (interim available), fall back to ITBD
+    """Save latest balance to database keyed on iban."""
     balance = None
     for b in balances:
         if b.get("balance_type") == "ITAV":
@@ -100,10 +160,9 @@ def save_balance(uid: str, iban: str, bank: str, balances: list) -> None:
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO balances (
-                    account_uid, iban, bank, amount, currency, balance_type, last_updated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    iban, bank, amount, currency, balance_type, last_updated
+                ) VALUES (?, ?, ?, ?, ?, ?)
             """, (
-                uid,
                 iban,
                 bank,
                 float(balance["balance_amount"]["amount"]),
@@ -117,30 +176,27 @@ def save_balance(uid: str, iban: str, bank: str, balances: list) -> None:
         _LOGGER.error("Error saving balance for %s: %s", iban, err)
 
 
-def get_balance(uid: str) -> Optional[float]:
-    """Get latest balance for an account."""
+def get_balance(iban: str) -> Optional[float]:
+    """Get latest balance for an account by IBAN."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             row = conn.execute(
-                "SELECT amount FROM balances WHERE account_uid = ?", (uid,)
+                "SELECT amount FROM balances WHERE iban = ?", (iban,)
             ).fetchone()
             return row[0] if row else None
     except Exception as err:
-        _LOGGER.error("Error reading balance for %s: %s", uid, err)
+        _LOGGER.error("Error reading balance for %s: %s", iban, err)
         return None
 
 
-# Whitelists. Only these values are ever interpolated into SQL; everything
-# else is passed as a bound parameter. Keep SENSOR_SCHEMA in __init__.py in
-# sync with both dicts so bad YAML fails at startup, not at read time.
-
+# Whitelists — only these values are interpolated into SQL.
 AGGREGATES = {
     "sum": "SUM",
     "avg": "AVG",
     "min": "MIN",
     "max": "MAX",
     "count": "COUNT",
-    "total": "TOTAL",      # like SUM, but returns 0.0 instead of NULL on empty
+    "total": "TOTAL",
 }
 
 MATCH_FIELDS = {
@@ -155,55 +211,37 @@ MATCH_MODES = ("contains", "equals", "starts_with", "ends_with")
 
 
 def _cycle_year(anchor_month: int, anchor_day: int, today: date) -> int:
-    """Year in which the current cycle started.
-
-    Unused now that _resolve_period no longer parses MM-DD anchors itself
-    (that logic moved into the YAML's own Jinja, rendered upstream in
-    sensor.py). Left in place rather than deleted.
-    """
+    """Unused helper — kept for reference."""
     if (today.month, today.day) >= (anchor_month, anchor_day):
         return today.year
     return today.year - 1
 
 
 def _resolve_period(period) -> tuple:
-    """Return (date_from, date_to) as ISO date strings, or None.
-
-    `period` is a mapping {"from": ..., "to": ...}. Values arrive here
-    already resolved -- any Jinja in the YAML (e.g. "{{ now().strftime(...) }}")
-    is rendered upstream, in the sensor, before this function is called.
-    Absent, missing, or empty means no restriction on that side.
-    """
+    """Return (date_from, date_to) as ISO date strings, or None."""
     if not period:
         return None, None
     return period.get("from") or None, period.get("to") or None
 
 
 def get_transaction_total(
-    uid: str,
+    iban: str,
     period=None,
     direction: str = "",
     matches: list = None,
     aggregate: str = "sum",
 ) -> float:
-    """Aggregate stored transactions for one account.
-
-    Every filter is optional and an empty/absent value means "no restriction",
-    so an unfiltered call returns the aggregate over all stored transactions
-    for the account. Runs against SQLite only -- no API call, no rate limit.
-    """
+    """Aggregate stored transactions for one account by IBAN."""
     try:
         agg = AGGREGATES.get(str(aggregate).lower())
         if not agg:
             _LOGGER.error("Unknown aggregate %r, falling back to SUM", aggregate)
             agg = "SUM"
 
-        # COUNT(amount) equals COUNT(*) here because amount is NOT NULL, but
-        # COUNT(*) says what is meant.
         column = "*" if agg == "COUNT" else "amount"
 
-        clauses = ["account_uid = ?"]
-        params = [uid]
+        clauses = ["iban = ?"]
+        params = [iban]
 
         for m in (matches or []):
             field = MATCH_FIELDS.get(m.get("field"))
@@ -235,10 +273,6 @@ def get_transaction_total(
 
         date_from, date_to = _resolve_period(period)
 
-        # String comparison, correct only because booking_date is ISO-8601
-        # (YYYY-MM-DD), which sorts lexicographically as it does
-        # chronologically. A bank returning any other format breaks this
-        # silently rather than loudly.
         if date_from:
             clauses.append("booking_date >= ?")
             params.append(date_from)

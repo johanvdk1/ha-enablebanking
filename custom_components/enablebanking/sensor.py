@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.template import Template
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, SESSIONS_PATH
+from .const import DOMAIN, SESSIONS_PATH, CONF_ACCOUNTS
 from .database import get_balance, get_transaction_total
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,9 +26,16 @@ async def async_setup_entry(
     coordinators = hass.data[DOMAIN][entry.entry_id]
     transaction_coordinator = coordinators["transaction_coordinator"]
     balance_coordinator = coordinators["balance_coordinator"]
-    sensors_config = coordinators.get("yaml_config", {}).get("sensors", [])
+    yaml_config = coordinators.get("yaml_config", {})
+    sensors_config = yaml_config.get("sensors", [])
 
-    # Load accounts from sessions file in executor to avoid blocking event loop
+    # Build alias→iban lookup from YAML accounts config
+    alias_map = {
+        a["iban"]: a["alias"]
+        for a in yaml_config.get(CONF_ACCOUNTS, [])
+    }
+
+    # Load accounts from sessions file in executor
     def _load_accounts():
         try:
             with open(SESSIONS_PATH) as f:
@@ -36,9 +43,11 @@ async def async_setup_entry(
             result = []
             for bank_name, session in sessions.items():
                 for account in session.get("accounts", []):
+                    iban = account.get("account_id", {}).get("iban", account.get("uid"))
                     result.append({
                         "uid": account.get("uid"),
-                        "iban": account.get("account_id", {}).get("iban", account.get("uid")),
+                        "iban": iban,
+                        "alias": alias_map.get(iban, iban),
                         "name": account.get("name", ""),
                         "bank": bank_name,
                     })
@@ -52,22 +61,16 @@ async def async_setup_entry(
     entities = []
 
     for account_data in accounts:
-        uid = account_data["uid"]
-
-        # Balance sensor
         entities.append(
-            EnableBankingBalanceSensor(balance_coordinator, uid, account_data)
+            EnableBankingBalanceSensor(balance_coordinator, account_data)
         )
-
-        # Transaction query sensors
         for sensor_cfg in sensors_config:
             entities.append(
                 EnableBankingTransactionSensor(
-                    transaction_coordinator, uid, account_data, sensor_cfg
+                    transaction_coordinator, account_data, sensor_cfg
                 )
             )
 
-    # Rate limit diagnostic sensors
     entities.append(EnableBankingRateLimitSensor(transaction_coordinator, "Transaction"))
     entities.append(EnableBankingRateLimitSensor(balance_coordinator, "Balance"))
 
@@ -75,16 +78,16 @@ async def async_setup_entry(
 
 
 class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
-    """Sensor for account balance - reads from database."""
+    """Sensor for account balance - reads from database by IBAN."""
 
-    def __init__(self, coordinator, uid, account_data):
+    def __init__(self, coordinator, account_data):
         """Initialize."""
         super().__init__(coordinator)
-        self._uid = uid
-        self._iban = account_data.get("iban", uid)
+        self._iban = account_data.get("iban")
+        self._alias = account_data.get("alias", self._iban)
         self._bank = account_data.get("bank", "Unknown")
-        self._attr_name = f"{self._bank} {self._iban} Balance"
-        self._attr_unique_id = f"enablebanking_balance_{uid}"
+        self._attr_name = f"{self._bank} {self._alias} Balance"
+        self._attr_unique_id = f"enablebanking_balance_{self._alias}"
         self._attr_device_class = SensorDeviceClass.MONETARY
         self._attr_state_class = SensorStateClass.TOTAL
         self._attr_native_unit_of_measurement = "EUR"
@@ -93,8 +96,8 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         """Return device info."""
         return {
-            "identifiers": {(DOMAIN, self._uid)},
-            "name": f"{self._bank} {self._iban}",
+            "identifiers": {(DOMAIN, self._alias)},
+            "name": f"{self._bank} {self._alias}",
             "manufacturer": self._bank,
             "model": "Bank Account",
         }
@@ -102,37 +105,31 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return balance from database."""
-        return get_balance(self._uid)
+        return get_balance(self._iban)
 
     @property
     def extra_state_attributes(self):
         """Return extra attributes."""
         return {
             "iban": self._iban,
+            "alias": self._alias,
             "bank": self._bank,
         }
 
 
 class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
-    """Sensor for querying transaction totals - reads from database.
+    """Sensor for querying transaction totals - reads from database by IBAN."""
 
-    period/match values in sensor_cfg may contain Jinja (e.g.
-    "{{ now().strftime('%Y-%m-01') }}"); they are rendered on every
-    coordinator update via _handle_coordinator_update, so the underlying
-    query can express rolling windows ("this month", "since 1 Feb of the
-    current cycle", etc.) without any code change per sensor.
-    """
-
-    def __init__(self, coordinator, uid, account_data, sensor_cfg):
+    def __init__(self, coordinator, account_data, sensor_cfg):
         """Initialize."""
         super().__init__(coordinator)
-        self._uid = uid
-        self._iban = account_data.get("iban", uid)
+        self._iban = account_data.get("iban")
+        self._alias = account_data.get("alias", self._iban)
         self._bank = account_data.get("bank", "Unknown")
         self._sensor_cfg = sensor_cfg
         self._attr_name = sensor_cfg["name"]
         self._attr_unique_id = (
-            f"enablebanking_tx_{uid}_{sensor_cfg['name'].lower().replace(' ', '_')}"
+            f"enablebanking_tx_{self._alias}_{sensor_cfg['name'].lower().replace(' ', '_')}"
         )
         if str(sensor_cfg.get("aggregate", "sum")).lower() == "count":
             self._attr_state_class = SensorStateClass.MEASUREMENT
@@ -146,8 +143,8 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         """Return device info."""
         return {
-            "identifiers": {(DOMAIN, self._uid)},
-            "name": f"{self._bank} {self._iban}",
+            "identifiers": {(DOMAIN, self._alias)},
+            "name": f"{self._bank} {self._alias}",
             "manufacturer": self._bank,
             "model": "Bank Account",
         }
@@ -158,13 +155,7 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
         return self._attr_native_value
 
     async def async_added_to_hass(self):
-        """Populate an initial value without waiting for the next coordinator refresh.
-
-        The integration deliberately skips fetching on startup (see
-        __init__.py), so coordinator.data can be empty right after a
-        restart. The SQLite data itself is unaffected by restarts, so
-        there's no reason the sensor's value should sit blank meanwhile.
-        """
+        """Populate initial value from database on startup."""
         await super().async_added_to_hass()
         await self._handle_coordinator_update()
 
@@ -182,16 +173,16 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
 
         self._attr_native_value = await self.hass.async_add_executor_job(
             get_transaction_total,
-            self._uid,
+            self._iban,
             rendered_period,
             self._sensor_cfg.get("direction", ""),
             rendered_matches,
             self._sensor_cfg.get("aggregate", "sum"),
         )
         self.async_write_ha_state()
-  
+
     async def _render(self, value):
-        """Render a config value as Jinja if it contains a template, else return as-is."""
+        """Render a Jinja template string, or return as-is."""
         if value is None:
             return None
         return Template(str(value), self.hass).async_render()
@@ -201,6 +192,7 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
         """Return extra attributes."""
         return {
             "iban": self._iban,
+            "alias": self._alias,
             "bank": self._bank,
             "filter": self._sensor_cfg,
         }
