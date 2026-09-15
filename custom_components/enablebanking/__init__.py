@@ -13,7 +13,6 @@ from .api import EnableBankingAPI
 from .const import (
     DOMAIN,
     CONF_APP_ID,
-    CONF_ACCOUNTS,
     CONF_SENSORS,
     CONF_TRANSACTION_INTERVAL,
     CONF_BALANCE_INTERVAL,
@@ -25,11 +24,6 @@ from .database import init_db
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor"]
-
-ACCOUNT_SCHEMA = vol.Schema({
-    vol.Required("alias"): cv.string,
-    vol.Required("iban"): cv.string,
-})
 
 SENSOR_SCHEMA = vol.Schema({
     vol.Required("name"): cv.string,
@@ -53,9 +47,6 @@ CONFIG_SCHEMA = vol.Schema({
     DOMAIN: vol.Schema({
         vol.Optional(CONF_TRANSACTION_INTERVAL, default=DEFAULT_TRANSACTION_INTERVAL): cv.positive_int,
         vol.Optional(CONF_BALANCE_INTERVAL, default=DEFAULT_BALANCE_INTERVAL): cv.positive_int,
-        vol.Optional(CONF_ACCOUNTS, default=[]): vol.All(
-            cv.ensure_list, [ACCOUNT_SCHEMA]
-        ),
         vol.Optional(CONF_SENSORS, default=[]): vol.All(
             cv.ensure_list, [SENSOR_SCHEMA]
         ),

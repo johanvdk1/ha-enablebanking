@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.template import Template
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, SESSIONS_PATH, CONF_ACCOUNTS
+from .const import DOMAIN, SESSIONS_PATH
 from .database import get_balance, get_transaction_total
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,16 +26,8 @@ async def async_setup_entry(
     coordinators = hass.data[DOMAIN][entry.entry_id]
     transaction_coordinator = coordinators["transaction_coordinator"]
     balance_coordinator = coordinators["balance_coordinator"]
-    yaml_config = coordinators.get("yaml_config", {})
-    sensors_config = yaml_config.get("sensors", [])
+    sensors_config = coordinators.get("yaml_config", {}).get("sensors", [])
 
-    # Build alias→iban lookup from YAML accounts config
-    alias_map = {
-        a["iban"]: a["alias"]
-        for a in yaml_config.get(CONF_ACCOUNTS, [])
-    }
-
-    # Load accounts from sessions file in executor
     def _load_accounts():
         try:
             with open(SESSIONS_PATH) as f:
@@ -47,7 +39,6 @@ async def async_setup_entry(
                     result.append({
                         "uid": account.get("uid"),
                         "iban": iban,
-                        "alias": alias_map.get(iban, iban),
                         "name": account.get("name", ""),
                         "bank": bank_name,
                     })
@@ -84,10 +75,9 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
         """Initialize."""
         super().__init__(coordinator)
         self._iban = account_data.get("iban")
-        self._alias = account_data.get("alias", self._iban)
         self._bank = account_data.get("bank", "Unknown")
-        self._attr_name = f"{self._bank} {self._alias} Balance"
-        self._attr_unique_id = f"enablebanking_balance_{self._alias}"
+        self._attr_name = f"{self._bank} {self._iban} Balance"
+        self._attr_unique_id = f"enablebanking_balance_{self._iban}"
         self._attr_device_class = SensorDeviceClass.MONETARY
         self._attr_state_class = SensorStateClass.TOTAL
         self._attr_native_unit_of_measurement = "EUR"
@@ -96,8 +86,8 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         """Return device info."""
         return {
-            "identifiers": {(DOMAIN, self._alias)},
-            "name": f"{self._bank} {self._alias}",
+            "identifiers": {(DOMAIN, self._iban)},
+            "name": f"{self._bank} {self._iban}",
             "manufacturer": self._bank,
             "model": "Bank Account",
         }
@@ -112,7 +102,6 @@ class EnableBankingBalanceSensor(CoordinatorEntity, SensorEntity):
         """Return extra attributes."""
         return {
             "iban": self._iban,
-            "alias": self._alias,
             "bank": self._bank,
         }
 
@@ -124,12 +113,11 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
         """Initialize."""
         super().__init__(coordinator)
         self._iban = account_data.get("iban")
-        self._alias = account_data.get("alias", self._iban)
         self._bank = account_data.get("bank", "Unknown")
         self._sensor_cfg = sensor_cfg
         self._attr_name = sensor_cfg["name"]
         self._attr_unique_id = (
-            f"enablebanking_tx_{self._alias}_{sensor_cfg['name'].lower().replace(' ', '_')}"
+            f"enablebanking_tx_{self._iban}_{sensor_cfg['name'].lower().replace(' ', '_')}"
         )
         if str(sensor_cfg.get("aggregate", "sum")).lower() == "count":
             self._attr_state_class = SensorStateClass.MEASUREMENT
@@ -143,8 +131,8 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         """Return device info."""
         return {
-            "identifiers": {(DOMAIN, self._alias)},
-            "name": f"{self._bank} {self._alias}",
+            "identifiers": {(DOMAIN, self._iban)},
+            "name": f"{self._bank} {self._iban}",
             "manufacturer": self._bank,
             "model": "Bank Account",
         }
@@ -192,7 +180,6 @@ class EnableBankingTransactionSensor(CoordinatorEntity, SensorEntity):
         """Return extra attributes."""
         return {
             "iban": self._iban,
-            "alias": self._alias,
             "bank": self._bank,
             "filter": self._sensor_cfg,
         }
